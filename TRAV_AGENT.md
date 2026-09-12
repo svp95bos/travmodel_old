@@ -36,7 +36,10 @@ Meeting
 
 ## Source priority
 
+IMPORTANT - ALWAYS check the internet for new and relevant sources. If such are found they should be added to this file.
+
 Use sources in approximately this order.
+
 
 ### MUST prefer official sporting data
 
