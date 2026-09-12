@@ -1,0 +1,12 @@
+bin/
+obj/
+.packages/
+.vs/
+*.user
+*.suo
+data/raw/
+data/work/
+artifacts/models/
+*.db
+*.mdf
+*.ldf

@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\TravModel.Application\TravModel.Application.csproj" />
+    <ProjectReference Include="..\..\src\TravModel.Domain\TravModel.Domain.csproj" />
+    <ProjectReference Include="..\..\src\TravModel.Infrastructure\TravModel.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\TravModel.ML\TravModel.ML.csproj" />
+  </ItemGroup>
+</Project>

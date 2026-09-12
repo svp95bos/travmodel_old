@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/TravModel.Application/TravModel.Application.csproj" />
+    <Project Path="src/TravModel.Cli/TravModel.Cli.csproj" />
+    <Project Path="src/TravModel.Domain/TravModel.Domain.csproj" />
+    <Project Path="src/TravModel.Infrastructure/TravModel.Infrastructure.csproj" />
+    <Project Path="src/TravModel.ML/TravModel.ML.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/TravModel.Tests/TravModel.Tests.csproj" />
+  </Folder>
+</Solution>
