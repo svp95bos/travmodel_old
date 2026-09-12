@@ -55,6 +55,44 @@ public sealed record ProviderResult(
     bool Galloped,
     string? RaceComment);
 
+public sealed record ProviderEntityReference(
+    Guid CanonicalId,
+    string EntityType,
+    string SourceName,
+    string ExternalId);
+
+public sealed record ProviderFact(
+    string EntityType,
+    string ExternalId,
+    string Field,
+    string RawValue,
+    string? NormalizedValue,
+    ObservationState State = ObservationState.Observed,
+    DateTimeOffset? ObservedAtUtc = null,
+    DateTimeOffset? ValidAtUtc = null,
+    bool IsAuthoritative = false);
+
+public sealed record ProviderRecentStart(
+    string HorseExternalId,
+    string ExternalRaceId,
+    DateTimeOffset StartTimeUtc,
+    string TrackName,
+    int RaceNumber,
+    int DistanceMetres,
+    StartMethod StartMethod,
+    int PostPosition,
+    int? FinishPosition,
+    decimal? KilometerTimeSeconds,
+    decimal? Odds,
+    string? Shoes,
+    string? Sulky,
+    string? TrackCondition,
+    decimal? PrizeMoneySek,
+    bool Galloped,
+    string? RaceComment,
+    string? DriverExternalId = null,
+    string? TrainerExternalId = null);
+
 public interface IRaceProvider
 {
     string Name { get; }
@@ -89,6 +127,36 @@ public interface IWeatherProvider
     string Name { get; }
 
     Task<IReadOnlyList<Observation>> GetWeatherObservationsAsync(
+        IReadOnlyCollection<Race> races,
+        DateTimeOffset asOfUtc,
+        CancellationToken cancellationToken);
+}
+
+public interface IRecentFormProvider
+{
+    string Name { get; }
+
+    Task<IReadOnlyList<SourceEnvelope<ProviderRecentStart>>> GetRecentStartsAsync(
+        IReadOnlyCollection<ProviderEntityReference> horses,
+        DateTimeOffset asOfUtc,
+        CancellationToken cancellationToken);
+}
+
+public interface IEntityProfileProvider
+{
+    string Name { get; }
+
+    Task<IReadOnlyList<SourceEnvelope<ProviderFact>>> GetProfileFactsAsync(
+        IReadOnlyCollection<ProviderEntityReference> entities,
+        DateTimeOffset asOfUtc,
+        CancellationToken cancellationToken);
+}
+
+public interface IEquipmentProvider
+{
+    string Name { get; }
+
+    Task<IReadOnlyList<SourceEnvelope<ProviderFact>>> GetEquipmentFactsAsync(
         IReadOnlyCollection<Race> races,
         DateTimeOffset asOfUtc,
         CancellationToken cancellationToken);

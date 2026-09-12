@@ -29,5 +29,7 @@ dotnet run --project src/TravModel.Cli -- init-db
 dotnet run --project src/TravModel.Cli -- demo-predict
 ```
 
+The project also supports forward-accumulating enrichment when a bulk historical endpoint is unavailable. Recent-start exports and timestamped facts can be imported repeatedly; overlapping windows are reconciled without pretending the data was known before it was retrieved. See [docs/incremental-collection.md](docs/incremental-collection.md).
+
 See [automation/README.md](automation/README.md) for the scheduled workflow and
 [docs/smhi-open-data.md](docs/smhi-open-data.md) for the weather endpoints and field mappings.

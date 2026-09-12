@@ -30,6 +30,21 @@ public enum ModelStatus
     Retired
 }
 
+public enum IdentityReviewStatus
+{
+    Pending,
+    Resolved,
+    Rejected
+}
+
+public enum SourceQualificationStatus
+{
+    Pending,
+    Approved,
+    Disallowed,
+    Disabled
+}
+
 public sealed class Track
 {
     public Guid Id { get; set; } = Guid.NewGuid();
@@ -137,6 +152,7 @@ public sealed class HistoricalStart
     public Guid? TrainerId { get; set; }
     public Person? Trainer { get; set; }
     public required string ExternalRaceId { get; set; }
+    public required string CanonicalStartKey { get; set; }
     public DateTimeOffset StartTimeUtc { get; set; }
     public required string TrackName { get; set; }
     public int RaceNumber { get; set; }
@@ -152,6 +168,95 @@ public sealed class HistoricalStart
     public decimal? PrizeMoneySek { get; set; }
     public bool Galloped { get; set; }
     public string? RaceComment { get; set; }
+    public required string SourceName { get; set; }
+    public required string SourceUrl { get; set; }
+    public DateTimeOffset RetrievedAtUtc { get; set; }
+    public DateTimeOffset? ObservedAtUtc { get; set; }
+    public DateTimeOffset FirstSeenAtUtc { get; set; }
+    public DateTimeOffset LastSeenAtUtc { get; set; }
+    public required string CompletenessFlags { get; set; }
+}
+
+public sealed class HistoricalStartRevision
+{
+    public long Id { get; set; }
+    public Guid HistoricalStartId { get; set; }
+    public HistoricalStart? HistoricalStart { get; set; }
+    public Guid HorseId { get; set; }
+    public Guid? DriverId { get; set; }
+    public Guid? TrainerId { get; set; }
+    public DateTimeOffset StartTimeUtc { get; set; }
+    public required string TrackName { get; set; }
+    public int RaceNumber { get; set; }
+    public int DistanceMetres { get; set; }
+    public StartMethod StartMethod { get; set; }
+    public int PostPosition { get; set; }
+    public int? FinishPosition { get; set; }
+    public decimal? KilometerTimeSeconds { get; set; }
+    public decimal? Odds { get; set; }
+    public string? Shoes { get; set; }
+    public string? Sulky { get; set; }
+    public string? TrackCondition { get; set; }
+    public decimal? PrizeMoneySek { get; set; }
+    public bool Galloped { get; set; }
+    public string? RaceComment { get; set; }
+    public required string SourceName { get; set; }
+    public required string SourceUrl { get; set; }
+    public DateTimeOffset RetrievedAtUtc { get; set; }
+    public DateTimeOffset? ObservedAtUtc { get; set; }
+    public required string ContentHash { get; set; }
+}
+
+/// <summary>Maps a provider identifier to a source-independent canonical entity.</summary>
+public sealed class ExternalIdentity
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public required string EntityType { get; set; }
+    public Guid EntityId { get; set; }
+    public required string SourceName { get; set; }
+    public required string ExternalId { get; set; }
+    public DateTimeOffset FirstSeenAtUtc { get; set; }
+    public DateTimeOffset LastSeenAtUtc { get; set; }
+    public bool IsVerified { get; set; }
+}
+
+public sealed class IdentityReview
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public required string EntityType { get; set; }
+    public required string SourceName { get; set; }
+    public required string ExternalId { get; set; }
+    public required string CandidateName { get; set; }
+    public Guid? CandidateEntityId { get; set; }
+    public required string Reason { get; set; }
+    public IdentityReviewStatus Status { get; set; }
+    public DateTimeOffset CreatedAtUtc { get; set; }
+    public DateTimeOffset? ResolvedAtUtc { get; set; }
+}
+
+public sealed class ProviderCheckpoint
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public required string Provider { get; set; }
+    public required string Scope { get; set; }
+    public DateTimeOffset LastAttemptAtUtc { get; set; }
+    public DateTimeOffset? LastSuccessAtUtc { get; set; }
+    public string? Cursor { get; set; }
+    public int ConsecutiveFailures { get; set; }
+    public string? LastError { get; set; }
+}
+
+public sealed class SourceQualification
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public required string SourceName { get; set; }
+    public required string Capability { get; set; }
+    public required Uri BaseUri { get; set; }
+    public SourceQualificationStatus Status { get; set; }
+    public string? TermsUrl { get; set; }
+    public string? RobotsUrl { get; set; }
+    public string? Notes { get; set; }
+    public DateTimeOffset CheckedAtUtc { get; set; }
 }
 
 public sealed class BettingMarketMembership
@@ -180,6 +285,8 @@ public sealed class Observation
     public ObservationState State { get; set; }
     public bool IsAuthoritative { get; set; }
     public required string ContentHash { get; set; }
+    public Guid? IngestionRunId { get; set; }
+    public IngestionRun? IngestionRun { get; set; }
 }
 
 public sealed class IngestionRun

@@ -35,11 +35,12 @@ public sealed class SqlTravRepository(TravDbContext dbContext) : ITravRepository
         var driverIds = race.Starters.Select(x => x.DriverId).ToArray();
         var trainerIds = race.Starters.Select(x => x.TrainerId).ToArray();
         var historyStart = cutoffUtc.AddDays(-90);
-        var history = await dbContext.HistoricalStarts
+        var historyRows = await dbContext.HistoricalStarts
             .AsNoTracking()
             .Where(x => horseIds.Contains(x.HorseId) && x.StartTimeUtc >= historyStart && x.StartTimeUtc < cutoffUtc)
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
+        var history = await EffectiveHistoryAsync(historyRows, cutoffUtc, cancellationToken).ConfigureAwait(false);
         var observationEntityIds = race.Starters.Select(x => x.Id.ToString()).Append(raceId.ToString()).ToArray();
         var observations = await dbContext.Observations
             .AsNoTracking()
@@ -48,13 +49,14 @@ public sealed class SqlTravRepository(TravDbContext dbContext) : ITravRepository
             .ConfigureAwait(false);
 
         var rateStart = cutoffUtc.AddDays(-30);
-        var combinationHistory = await dbContext.HistoricalStarts
+        var combinationRows = await dbContext.HistoricalStarts
             .AsNoTracking()
             .Where(x => x.StartTimeUtc >= rateStart && x.StartTimeUtc < cutoffUtc &&
                         ((x.DriverId != null && driverIds.Contains(x.DriverId.Value)) ||
                          (x.TrainerId != null && trainerIds.Contains(x.TrainerId.Value))))
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
+        var combinationHistory = await EffectiveHistoryAsync(combinationRows, cutoffUtc, cancellationToken).ConfigureAwait(false);
 
         var starterFeatures = race.Starters.Select(starter => new StarterFeatureHistory(
             starter,
@@ -119,4 +121,81 @@ public sealed class SqlTravRepository(TravDbContext dbContext) : ITravRepository
         var values = starts.Where(x => x.FinishPosition.HasValue).ToArray();
         return new RollingRate(values.Length, values.Count(x => x.FinishPosition == 1), values.Count(x => x.FinishPosition <= 3));
     }
+
+    private async Task<IReadOnlyList<HistoricalStart>> EffectiveHistoryAsync(
+        List<HistoricalStart> rows,
+        DateTimeOffset cutoffUtc,
+        CancellationToken cancellationToken)
+    {
+        if (rows.Count == 0) return [];
+        var ids = rows.Select(x => x.Id).ToArray();
+        var revisions = await dbContext.HistoricalStartRevisions.AsNoTracking()
+            .Where(x => ids.Contains(x.HistoricalStartId) && x.RetrievedAtUtc <= cutoffUtc &&
+                        (x.ObservedAtUtc == null || x.ObservedAtUtc <= cutoffUtc))
+            .ToListAsync(cancellationToken).ConfigureAwait(false);
+        var byStart = revisions.GroupBy(x => x.HistoricalStartId).ToDictionary(x => x.Key, x => x
+            .OrderByDescending(value => SourcePriority(value.SourceName))
+            .ThenByDescending(value => value.RetrievedAtUtc)
+            .ToArray());
+        var output = new List<HistoricalStart>();
+        foreach (var row in rows)
+        {
+            if (byStart.TryGetValue(row.Id, out var startRevisions))
+            {
+                output.Add(Project(row, startRevisions));
+            }
+            else if (row.RetrievedAtUtc <= cutoffUtc && (row.ObservedAtUtc is null || row.ObservedAtUtc <= cutoffUtc))
+            {
+                output.Add(row);
+            }
+        }
+        return output;
+    }
+
+    private static HistoricalStart Project(HistoricalStart row, HistoricalStartRevision[] revisions)
+    {
+        var primary = revisions[0];
+        static T? First<T>(IEnumerable<T?> values) where T : class => values.FirstOrDefault(x => x is not null);
+        static T? FirstValue<T>(IEnumerable<T?> values) where T : struct => values.FirstOrDefault(x => x.HasValue);
+        return new HistoricalStart
+        {
+            Id = row.Id,
+            HorseId = primary.HorseId,
+            DriverId = FirstValue(revisions.Select(x => x.DriverId)),
+            TrainerId = FirstValue(revisions.Select(x => x.TrainerId)),
+            ExternalRaceId = row.ExternalRaceId,
+            CanonicalStartKey = row.CanonicalStartKey,
+            StartTimeUtc = primary.StartTimeUtc,
+            TrackName = primary.TrackName,
+            RaceNumber = primary.RaceNumber,
+            DistanceMetres = primary.DistanceMetres,
+            StartMethod = primary.StartMethod,
+            PostPosition = primary.PostPosition,
+            FinishPosition = FirstValue(revisions.Select(x => x.FinishPosition)),
+            KilometerTimeSeconds = FirstValue(revisions.Select(x => x.KilometerTimeSeconds)),
+            Odds = FirstValue(revisions.Select(x => x.Odds)),
+            Shoes = First(revisions.Select(x => x.Shoes)),
+            Sulky = First(revisions.Select(x => x.Sulky)),
+            TrackCondition = First(revisions.Select(x => x.TrackCondition)),
+            PrizeMoneySek = FirstValue(revisions.Select(x => x.PrizeMoneySek)),
+            Galloped = primary.Galloped,
+            RaceComment = First(revisions.Select(x => x.RaceComment)),
+            SourceName = primary.SourceName,
+            SourceUrl = primary.SourceUrl,
+            RetrievedAtUtc = revisions.Max(x => x.RetrievedAtUtc),
+            ObservedAtUtc = primary.ObservedAtUtc,
+            FirstSeenAtUtc = row.FirstSeenAtUtc,
+            LastSeenAtUtc = row.LastSeenAtUtc,
+            CompletenessFlags = row.CompletenessFlags
+        };
+    }
+
+    private static int SourcePriority(string source) => source switch
+    {
+        "SvenskTravsport" => 400,
+        "ATG" => 300,
+        "Skoinfo" => 200,
+        "Travmaskinen" => 100,
+        _ => 0
+    };
 }

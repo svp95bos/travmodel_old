@@ -38,6 +38,7 @@ public sealed class RaceIngestionService(TravDbContext dbContext)
                 track.Latitude = incoming.TrackLatitude ?? track.Latitude;
                 track.Longitude = incoming.TrackLongitude ?? track.Longitude;
             }
+            await UpsertIdentityAsync("Track", track.Id, source, incoming.TrackExternalId, envelope.RetrievedAtUtc, cancellationToken).ConfigureAwait(false);
 
             var meeting = await dbContext.Meetings.SingleOrDefaultAsync(
                 x => x.ExternalSource == source && x.ExternalId == incoming.ExternalId,
@@ -54,6 +55,7 @@ public sealed class RaceIngestionService(TravDbContext dbContext)
                 dbContext.Meetings.Add(meeting);
                 written++;
             }
+            await UpsertIdentityAsync("Meeting", meeting.Id, source, incoming.ExternalId, envelope.RetrievedAtUtc, cancellationToken).ConfigureAwait(false);
 
             foreach (var incomingRace in incoming.Races)
             {
@@ -85,6 +87,10 @@ public sealed class RaceIngestionService(TravDbContext dbContext)
                     race.RaceType = incomingRace.RaceType;
                     race.ConditionsText = incomingRace.ConditionsText;
                 }
+                await UpsertIdentityAsync("Race", race.Id, source, incomingRace.ExternalId, envelope.RetrievedAtUtc, cancellationToken).ConfigureAwait(false);
+                AddObservation(run, "Race", race.Id, "ScheduledStartUtc", incomingRace.ScheduledStartUtc.ToUniversalTime().ToString("O"), envelope, true);
+                AddObservation(run, "Race", race.Id, "DistanceMetres", incomingRace.DistanceMetres.ToString(System.Globalization.CultureInfo.InvariantCulture), envelope, true);
+                AddObservation(run, "Race", race.Id, "StartMethod", incomingRace.StartMethod.ToString(), envelope, true);
 
                 foreach (var incomingStarter in incomingRace.Starters)
                 {
@@ -105,6 +111,16 @@ public sealed class RaceIngestionService(TravDbContext dbContext)
                     starter.PostPosition = incomingStarter.PostPosition;
                     starter.DistanceMetres = incomingStarter.DistanceMetres;
                     starter.IsScratched = incomingStarter.IsScratched;
+                    await UpsertIdentityAsync("Horse", horse.Id, source, incomingStarter.HorseExternalId, envelope.RetrievedAtUtc, cancellationToken).ConfigureAwait(false);
+                    await UpsertIdentityAsync("Person", driver.Id, source, incomingStarter.DriverExternalId, envelope.RetrievedAtUtc, cancellationToken).ConfigureAwait(false);
+                    await UpsertIdentityAsync("Person", trainer.Id, source, incomingStarter.TrainerExternalId, envelope.RetrievedAtUtc, cancellationToken).ConfigureAwait(false);
+                    await UpsertIdentityAsync("Starter", starter.Id, source, $"{incomingRace.ExternalId}:{incomingStarter.HorseExternalId}", envelope.RetrievedAtUtc, cancellationToken).ConfigureAwait(false);
+                    AddObservation(run, "Starter", starter.Id, "DriverId", driver.Id.ToString("D"), envelope, true);
+                    AddObservation(run, "Starter", starter.Id, "TrainerId", trainer.Id.ToString("D"), envelope, true);
+                    AddObservation(run, "Starter", starter.Id, "HorseNumber", incomingStarter.HorseNumber.ToString(System.Globalization.CultureInfo.InvariantCulture), envelope, true);
+                    AddObservation(run, "Starter", starter.Id, "PostPosition", incomingStarter.PostPosition.ToString(System.Globalization.CultureInfo.InvariantCulture), envelope, true);
+                    AddObservation(run, "Starter", starter.Id, "DistanceMetres", incomingStarter.DistanceMetres.ToString(System.Globalization.CultureInfo.InvariantCulture), envelope, true);
+                    AddObservation(run, "Starter", starter.Id, "IsScratched", incomingStarter.IsScratched.ToString(System.Globalization.CultureInfo.InvariantCulture), envelope, true);
                 }
             }
 
@@ -128,33 +144,104 @@ public sealed class RaceIngestionService(TravDbContext dbContext)
             var incoming = envelope.Value;
             var race = await dbContext.Races
                 .Include(x => x.Starters).ThenInclude(x => x.Horse)
+                .Include(x => x.Meeting).ThenInclude(x => x!.Track)
                 .SingleOrDefaultAsync(x => x.ExternalSource == envelope.SourceName && x.ExternalId == incoming.RaceExternalId, cancellationToken)
                 .ConfigureAwait(false);
             if (race is null) continue;
             var starter = race.Starters.SingleOrDefault(x => x.Horse?.ExternalId == incoming.HorseExternalId);
             if (starter is null) continue;
-            if (await dbContext.Results.AnyAsync(x => x.RaceId == race.Id && x.StarterId == starter.Id, cancellationToken).ConfigureAwait(false))
+            var result = await dbContext.Results.SingleOrDefaultAsync(x => x.RaceId == race.Id && x.StarterId == starter.Id,
+                cancellationToken).ConfigureAwait(false);
+            if (result is null)
             {
-                continue;
+                result = new RaceResult
+                {
+                    RaceId = race.Id,
+                    StarterId = starter.Id,
+                    FinishCode = incoming.FinishCode,
+                    SourceName = envelope.SourceName,
+                    SourceUrl = envelope.SourceUrl.ToString(),
+                    RetrievedAtUtc = envelope.RetrievedAtUtc,
+                    PublishedAtUtc = envelope.ObservedAtUtc
+                };
+                dbContext.Results.Add(result);
+                written++;
             }
+            result.FinishPosition = incoming.FinishPosition;
+            result.FinishCode = incoming.FinishCode;
+            result.KilometerTimeSeconds = incoming.KilometerTimeSeconds;
+            result.WinningMarginMetres = incoming.WinningMarginMetres;
+            result.PrizeMoneySek = incoming.PrizeMoneySek;
+            result.Galloped = incoming.Galloped;
+            result.RaceComment = incoming.RaceComment;
+            result.SourceName = envelope.SourceName;
+            result.SourceUrl = envelope.SourceUrl.ToString();
+            result.RetrievedAtUtc = envelope.RetrievedAtUtc;
+            result.PublishedAtUtc = envelope.ObservedAtUtc;
+            AddObservation(run, "Starter", starter.Id, "FinishPosition", incoming.FinishPosition?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty, envelope, true);
+            AddObservation(run, "Starter", starter.Id, "FinishCode", incoming.FinishCode, envelope, true);
+            AddObservation(run, "Starter", starter.Id, "KilometerTimeSeconds", incoming.KilometerTimeSeconds?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty, envelope, true);
+            AddObservation(run, "Starter", starter.Id, "PrizeMoneySek", incoming.PrizeMoneySek?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty, envelope, true);
+            AddObservation(run, "Starter", starter.Id, "Galloped", incoming.Galloped.ToString(System.Globalization.CultureInfo.InvariantCulture), envelope, true);
 
-            dbContext.Results.Add(new RaceResult
+            var canonicalStartKey = race.Id.ToString("D");
+            var historical = await dbContext.HistoricalStarts.SingleOrDefaultAsync(x =>
+                x.HorseId == starter.HorseId && x.CanonicalStartKey == canonicalStartKey, cancellationToken).ConfigureAwait(false);
+            if (historical is null)
             {
-                RaceId = race.Id,
-                StarterId = starter.Id,
-                FinishPosition = incoming.FinishPosition,
-                FinishCode = incoming.FinishCode,
-                KilometerTimeSeconds = incoming.KilometerTimeSeconds,
-                WinningMarginMetres = incoming.WinningMarginMetres,
-                PrizeMoneySek = incoming.PrizeMoneySek,
-                Galloped = incoming.Galloped,
-                RaceComment = incoming.RaceComment,
-                SourceName = envelope.SourceName,
-                SourceUrl = envelope.SourceUrl.ToString(),
-                RetrievedAtUtc = envelope.RetrievedAtUtc,
-                PublishedAtUtc = envelope.ObservedAtUtc
-            });
-            written++;
+                historical = new HistoricalStart
+                {
+                    HorseId = starter.HorseId,
+                    DriverId = starter.DriverId,
+                    TrainerId = starter.TrainerId,
+                    ExternalRaceId = incoming.RaceExternalId,
+                    CanonicalStartKey = canonicalStartKey,
+                    StartTimeUtc = race.ScheduledStartUtc,
+                    TrackName = race.Meeting?.Track?.Name ?? "Unknown",
+                    RaceNumber = race.RaceNumber,
+                    DistanceMetres = starter.DistanceMetres,
+                    StartMethod = race.StartMethod,
+                    PostPosition = starter.PostPosition,
+                    FinishPosition = incoming.FinishPosition,
+                    KilometerTimeSeconds = incoming.KilometerTimeSeconds,
+                    PrizeMoneySek = incoming.PrizeMoneySek,
+                    Galloped = incoming.Galloped,
+                    RaceComment = incoming.RaceComment,
+                    SourceName = envelope.SourceName,
+                    SourceUrl = envelope.SourceUrl.ToString(),
+                    RetrievedAtUtc = envelope.RetrievedAtUtc,
+                    ObservedAtUtc = envelope.ObservedAtUtc,
+                    FirstSeenAtUtc = envelope.RetrievedAtUtc,
+                    LastSeenAtUtc = envelope.RetrievedAtUtc,
+                    CompletenessFlags = "Odds,Shoes,Sulky,TrackCondition"
+                };
+                dbContext.HistoricalStarts.Add(historical);
+                written++;
+            }
+            else
+            {
+                historical.FinishPosition = incoming.FinishPosition;
+                historical.KilometerTimeSeconds = incoming.KilometerTimeSeconds;
+                historical.PrizeMoneySek = incoming.PrizeMoneySek;
+                historical.Galloped = incoming.Galloped;
+                historical.RaceComment = incoming.RaceComment;
+                historical.LastSeenAtUtc = envelope.RetrievedAtUtc;
+                historical.SourceName = envelope.SourceName;
+                historical.SourceUrl = envelope.SourceUrl.ToString();
+            }
+            var recent = new ProviderRecentStart(incoming.HorseExternalId, incoming.RaceExternalId, race.ScheduledStartUtc,
+                race.Meeting?.Track?.Name ?? "Unknown", race.RaceNumber, starter.DistanceMetres, race.StartMethod,
+                starter.PostPosition, incoming.FinishPosition, incoming.KilometerTimeSeconds, null, null, null, null,
+                incoming.PrizeMoneySek, incoming.Galloped, incoming.RaceComment,
+                starter.Driver?.ExternalId, starter.Trainer?.ExternalId);
+            var recentEnvelope = new SourceEnvelope<ProviderRecentStart>(recent, envelope.SourceName, envelope.SourceUrl,
+                envelope.RetrievedAtUtc, envelope.ObservedAtUtc, envelope.RawPayload, envelope.RawArtifact);
+            var revision = HistoricalStartRevisionFactory.Create(historical, recent, recentEnvelope);
+            if (!await dbContext.HistoricalStartRevisions.AnyAsync(x => x.ContentHash == revision.ContentHash, cancellationToken).ConfigureAwait(false))
+            {
+                dbContext.HistoricalStartRevisions.Add(revision);
+                written++;
+            }
         }
 
         CompleteRun(run, written);
@@ -232,6 +319,54 @@ public sealed class RaceIngestionService(TravDbContext dbContext)
         person = new Person { ExternalSource = source, ExternalId = externalId, Name = name };
         dbContext.People.Add(person);
         return person;
+    }
+
+    private async Task UpsertIdentityAsync(
+        string entityType,
+        Guid entityId,
+        string source,
+        string externalId,
+        DateTimeOffset seenAtUtc,
+        CancellationToken cancellationToken)
+    {
+        var identity = dbContext.ExternalIdentities.Local.SingleOrDefault(x =>
+            x.EntityType == entityType && x.SourceName == source && x.ExternalId == externalId)
+            ?? await dbContext.ExternalIdentities.SingleOrDefaultAsync(x =>
+                x.EntityType == entityType && x.SourceName == source && x.ExternalId == externalId,
+                cancellationToken).ConfigureAwait(false);
+        if (identity is null)
+        {
+            dbContext.ExternalIdentities.Add(new ExternalIdentity
+            {
+                EntityType = entityType,
+                EntityId = entityId,
+                SourceName = source,
+                ExternalId = externalId,
+                FirstSeenAtUtc = seenAtUtc,
+                LastSeenAtUtc = seenAtUtc,
+                IsVerified = true
+            });
+            return;
+        }
+
+        if (identity.EntityId != entityId)
+            throw new InvalidDataException($"Identity conflict for {entityType} {source}:{externalId}.");
+        if (seenAtUtc > identity.LastSeenAtUtc) identity.LastSeenAtUtc = seenAtUtc;
+    }
+
+    private void AddObservation<T>(
+        IngestionRun run,
+        string entityType,
+        Guid entityId,
+        string field,
+        string value,
+        SourceEnvelope<T> envelope,
+        bool authoritative)
+    {
+        var observation = ObservationFactory.Create(entityType, entityId.ToString("D"), field, envelope.SourceName,
+            envelope.SourceUrl.ToString(), envelope.RetrievedAtUtc, envelope.ObservedAtUtc, value, value, authoritative);
+        observation.IngestionRun = run;
+        dbContext.Observations.Add(observation);
     }
 }
 

@@ -27,18 +27,20 @@ Read AGENTS.md and TRAV_AGENT.md. Run `dotnet run --project src/TravModel.Cli --
 
 Polling the 15–20 minute window produces one observation close to T-15 while retaining the exact feature cutoff.
 
+The snapshot planner also exposes T-24h, T-6h, T-60m and T-5m windows. Equipment adapters should use the same planner and append observations rather than overwrite declarations.
+
 ## Daily result and export task
 
 Schedule at 02:00 Europe/Stockholm in an isolated worktree:
 
 ```text
-Read AGENTS.md and TRAV_AGENT.md. Sync yesterday's official results, settle immutable predictions, and export yesterday's curated partition. Verify the manifest hashes and run tests. Create or update a branch named `automation/data-YYYY-MM-DD` and open a pull request. Never push directly to main. Do not include raw payloads, credentials, model binaries, SQL files, or local database files.
+Read AGENTS.md and TRAV_AGENT.md. Sync official results for the rolling seven-day repair window, settle immutable predictions, and export yesterday's curated partition. Verify the manifest hashes and run tests. Create or update a branch named `automation/data-YYYY-MM-DD` and open a pull request. Never push directly to main. Do not include raw payloads, credentials, model binaries, SQL files, or local database files.
 ```
 
 Equivalent commands:
 
 ```powershell
-dotnet run --project src/TravModel.Cli -- sync-results --from <yesterday> --to <today>
+dotnet run --project src/TravModel.Cli -- sync-results --from <seven-days-ago> --to <today>
 dotnet run --project src/TravModel.Cli -- settle --through <current UTC instant>
 dotnet run --project src/TravModel.Cli -- export-curated --date <yesterday>
 dotnet test
@@ -67,3 +69,5 @@ Read AGENTS.md and TRAV_AGENT.md. For SportingOnly and MarketAware, run the chal
 - Raw artifacts remain under `data/raw` and are content-addressed but Git-ignored.
 - A data PR contains only `data/curated/race_date=YYYY-MM-DD` partitions and manifests.
 - Archive obsolete scheduled-task worktrees regularly.
+- Run `data-health` daily and treat its provider-alert exit code as degraded collection, not permission to substitute fabricated values.
+- Public-page enrichment stays disabled until each provider/capability is recorded as approved with `qualify-source`.

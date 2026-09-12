@@ -59,3 +59,17 @@ public static class SnapshotPlanner
             .ToArray();
     }
 }
+
+public sealed record DataCoverageReport(
+    DateTimeOffset GeneratedAtUtc,
+    DateTimeOffset WindowStartUtc,
+    DateTimeOffset WindowEndUtc,
+    int Races,
+    int Starters,
+    int StartersWithThreeRecentStarts,
+    int StartersWithFiveRecentStarts,
+    int StartersWithEquipment,
+    int PendingIdentityReviews,
+    int FailedIngestionRuns,
+    IReadOnlyDictionary<string, int> ObservationsBySource,
+    IReadOnlyList<string> ProviderAlerts);

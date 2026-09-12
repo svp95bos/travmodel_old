@@ -19,6 +19,12 @@ internal static class TravModelCommand
           backfill --from yyyy-MM-dd --to yyyy-MM-dd
           sync-results --from yyyy-MM-dd --to yyyy-MM-dd
           collect-due [--as-of ISO-8601]
+          build-shadow-dataset --through ISO-8601
+          data-health --from yyyy-MM-dd --to yyyy-MM-dd
+          source-status
+          qualify-source --source name --capability name --base-uri URI --status Pending|Approved|Disallowed|Disabled
+          ingest-enrichment --file path-to-json
+          link-identity --entity-type Horse|Person|Race|Meeting|Track|Starter --entity-id GUID --source name --external-id id
           settle [--through ISO-8601]
           build-dataset --through ISO-8601 [--kind SportingOnly|MarketAware]
           train-challenger --through ISO-8601 [--kind SportingOnly|MarketAware]
@@ -45,6 +51,12 @@ internal static class TravModelCommand
                 "sync-calendar" or "backfill" => await SyncCalendarAsync(arguments, cancellationToken).ConfigureAwait(false),
                 "sync-results" => await SyncResultsAsync(arguments, cancellationToken).ConfigureAwait(false),
                 "collect-due" => await CollectDueAsync(arguments, cancellationToken).ConfigureAwait(false),
+                "build-shadow-dataset" => await BuildShadowDatasetAsync(arguments, cancellationToken).ConfigureAwait(false),
+                "data-health" => await DataHealthAsync(arguments, cancellationToken).ConfigureAwait(false),
+                "source-status" => await SourceStatusAsync(cancellationToken).ConfigureAwait(false),
+                "qualify-source" => await QualifySourceAsync(arguments, cancellationToken).ConfigureAwait(false),
+                "ingest-enrichment" => await IngestEnrichmentAsync(arguments, cancellationToken).ConfigureAwait(false),
+                "link-identity" => await LinkIdentityAsync(arguments, cancellationToken).ConfigureAwait(false),
                 "settle" => await SettleAsync(arguments, cancellationToken).ConfigureAwait(false),
                 "build-dataset" => await BuildDatasetAsync(arguments, cancellationToken).ConfigureAwait(false),
                 "train-challenger" or "evaluate-and-promote" => await TrainAndPromoteAsync(arguments, cancellationToken).ConfigureAwait(false),
@@ -177,6 +189,174 @@ internal static class TravModelCommand
         var target = Path.Combine(targetDirectory, $"dataset-{kind.ToString().ToLowerInvariant()}-{through:yyyyMMddHHmmss}.json");
         await File.WriteAllTextAsync(target, JsonSerializer.Serialize(races, DatasetJsonOptions), cancellationToken).ConfigureAwait(false);
         Console.WriteLine($"Wrote {races.Count} labeled races to {Path.GetRelativePath(RepositoryRoot(), target)}.");
+        return 0;
+    }
+
+    private static async Task<int> BuildShadowDatasetAsync(Arguments arguments, CancellationToken cancellationToken)
+    {
+        var through = arguments.RequiredInstant("through");
+        await using var db = DatabaseBootstrap.CreateContext(ConnectionString());
+        var races = await db.Races.AsNoTracking().Where(x => x.ScheduledStartUtc <= through)
+            .OrderBy(x => x.ScheduledStartUtc).ToListAsync(cancellationToken).ConfigureAwait(false);
+        var repository = new SqlTravRepository(db);
+        var output = new List<ShadowRaceFeatureSet>();
+        foreach (var race in races)
+        {
+            var cutoff = race.ScheduledStartUtc.AddMinutes(-15);
+            var input = await repository.GetFeatureInputAsync(race.Id, cutoff, cancellationToken).ConfigureAwait(false);
+            if (input is not null) output.Add(PointInTimeShadowFeatureBuilder.Build(input, cutoff));
+        }
+        var directory = Path.Combine(RepositoryRoot(), "data", "work");
+        Directory.CreateDirectory(directory);
+        var target = Path.Combine(directory, $"shadow-dataset-{through:yyyyMMddHHmmss}.json");
+        await File.WriteAllTextAsync(target, JsonSerializer.Serialize(output, DatasetJsonOptions), cancellationToken).ConfigureAwait(false);
+        Console.WriteLine($"Wrote {output.Count} shadow race feature sets to {Path.GetRelativePath(RepositoryRoot(), target)}; production model inputs were unchanged.");
+        return 0;
+    }
+
+    private static async Task<int> DataHealthAsync(Arguments arguments, CancellationToken cancellationToken)
+    {
+        var from = arguments.RequiredDate("from");
+        var to = arguments.RequiredDate("to");
+        var fromUtc = new DateTimeOffset(from.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
+        var toUtc = new DateTimeOffset(to.AddDays(1).ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
+        await using var db = DatabaseBootstrap.CreateContext(ConnectionString());
+        var report = await new DataCoverageService(db).BuildAsync(fromUtc, toUtc, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
+        Console.WriteLine(JsonSerializer.Serialize(report, PrettyJsonOptions));
+        return report.ProviderAlerts.Count == 0 ? 0 : 4;
+    }
+
+    private static async Task<int> SourceStatusAsync(CancellationToken cancellationToken)
+    {
+        await using var db = DatabaseBootstrap.CreateContext(ConnectionString());
+        var values = await db.SourceQualifications.AsNoTracking().OrderBy(x => x.SourceName).ThenBy(x => x.Capability)
+            .ToListAsync(cancellationToken).ConfigureAwait(false);
+        if (values.Count == 0)
+        {
+            Console.WriteLine("No public sources have been qualified. Enrichment adapters remain disabled.");
+            return 2;
+        }
+        foreach (var value in values)
+            Console.WriteLine($"{value.Status,-10} {value.SourceName}/{value.Capability} checked {value.CheckedAtUtc:O} {value.BaseUri}");
+        return 0;
+    }
+
+    private static async Task<int> QualifySourceAsync(Arguments arguments, CancellationToken cancellationToken)
+    {
+        var source = arguments.Required("source");
+        var capability = arguments.Required("capability");
+        var baseUri = new Uri(arguments.Required("base-uri"), UriKind.Absolute);
+        var status = arguments.RequiredEnum<SourceQualificationStatus>("status");
+        await using var db = DatabaseBootstrap.CreateContext(ConnectionString());
+        var value = await db.SourceQualifications.SingleOrDefaultAsync(x => x.SourceName == source && x.Capability == capability,
+            cancellationToken).ConfigureAwait(false);
+        if (value is null)
+        {
+            value = new SourceQualification { SourceName = source, Capability = capability, BaseUri = baseUri };
+            db.SourceQualifications.Add(value);
+        }
+        value.BaseUri = baseUri;
+        value.Status = status;
+        value.TermsUrl = arguments.Optional("terms-url");
+        value.RobotsUrl = arguments.Optional("robots-url");
+        value.Notes = arguments.Optional("notes");
+        value.CheckedAtUtc = DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        Console.WriteLine($"Recorded {source}/{capability} as {status}.");
+        return 0;
+    }
+
+    private static async Task<int> IngestEnrichmentAsync(Arguments arguments, CancellationToken cancellationToken)
+    {
+        var path = Path.GetFullPath(arguments.Required("file"), Environment.CurrentDirectory);
+        var bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+        var document = JsonSerializer.Deserialize<EnrichmentImportDocument>(bytes, ImportJsonOptions)
+            ?? throw new InvalidDataException("The enrichment import document is empty.");
+        if (string.IsNullOrWhiteSpace(document.SourceName) || document.SourceUrl is null)
+            throw new InvalidDataException("sourceName and sourceUrl are required.");
+        var retrieved = document.RetrievedAtUtc == default ? DateTimeOffset.UtcNow : document.RetrievedAtUtc;
+        var rawStore = new RawArtifactStore(RepositoryRoot());
+        var stored = await rawStore.StoreAsync(document.SourceName, retrieved, bytes, cancellationToken).ConfigureAwait(false);
+        var artifact = new RawArtifactReference(stored.RelativePath, stored.Sha256, stored.SizeBytes);
+        var raw = System.Text.Encoding.UTF8.GetString(bytes);
+        await using var db = DatabaseBootstrap.CreateContext(ConnectionString());
+        var ingestion = new EnrichmentIngestionService(db);
+        int written;
+        if (string.Equals(document.Kind, "recent-starts", StringComparison.OrdinalIgnoreCase))
+        {
+            var values = document.Records.Deserialize<List<ProviderRecentStart>>(ImportJsonOptions) ?? [];
+            var envelopes = values.Select(x => new SourceEnvelope<ProviderRecentStart>(x, document.SourceName,
+                document.SourceUrl, retrieved, document.ObservedAtUtc, raw, artifact)).ToArray();
+            written = await ingestion.ImportRecentStartsAsync(envelopes, cancellationToken).ConfigureAwait(false);
+        }
+        else if (string.Equals(document.Kind, "facts", StringComparison.OrdinalIgnoreCase))
+        {
+            var values = document.Records.Deserialize<List<ProviderFact>>(ImportJsonOptions) ?? [];
+            var envelopes = values.Select(x => new SourceEnvelope<ProviderFact>(x, document.SourceName,
+                document.SourceUrl, retrieved, document.ObservedAtUtc, raw, artifact)).ToArray();
+            written = await ingestion.ImportFactsAsync(envelopes, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            throw new InvalidDataException("kind must be 'recent-starts' or 'facts'.");
+        }
+        Console.WriteLine($"Imported {written} canonical projections, revisions, or fact observations from {document.SourceName}.");
+        return 0;
+    }
+
+    private static async Task<int> LinkIdentityAsync(Arguments arguments, CancellationToken cancellationToken)
+    {
+        var entityType = arguments.Required("entity-type");
+        var entityId = Guid.Parse(arguments.Required("entity-id"));
+        var source = arguments.Required("source");
+        var externalId = arguments.Required("external-id");
+        await using var db = DatabaseBootstrap.CreateContext(ConnectionString());
+        var entityExists = entityType.ToLowerInvariant() switch
+        {
+            "horse" => await db.Horses.AnyAsync(x => x.Id == entityId, cancellationToken).ConfigureAwait(false),
+            "person" => await db.People.AnyAsync(x => x.Id == entityId, cancellationToken).ConfigureAwait(false),
+            "race" => await db.Races.AnyAsync(x => x.Id == entityId, cancellationToken).ConfigureAwait(false),
+            "meeting" => await db.Meetings.AnyAsync(x => x.Id == entityId, cancellationToken).ConfigureAwait(false),
+            "track" => await db.Tracks.AnyAsync(x => x.Id == entityId, cancellationToken).ConfigureAwait(false),
+            "starter" => await db.Starters.AnyAsync(x => x.Id == entityId, cancellationToken).ConfigureAwait(false),
+            _ => throw new ArgumentException($"Unsupported entity type '{entityType}'.")
+        };
+        if (!entityExists) throw new InvalidOperationException($"Canonical {entityType} {entityId:D} does not exist.");
+        var normalizedType = char.ToUpperInvariant(entityType[0]) + entityType[1..].ToLowerInvariant();
+        var identity = await db.ExternalIdentities.SingleOrDefaultAsync(x => x.EntityType == normalizedType && x.SourceName == source && x.ExternalId == externalId,
+            cancellationToken).ConfigureAwait(false);
+        if (identity is not null && identity.EntityId != entityId)
+            throw new InvalidOperationException($"{source}:{externalId} is already linked to {identity.EntityId:D}.");
+        var now = DateTimeOffset.UtcNow;
+        if (identity is null)
+        {
+            identity = new ExternalIdentity
+            {
+                EntityType = normalizedType,
+                EntityId = entityId,
+                SourceName = source,
+                ExternalId = externalId,
+                FirstSeenAtUtc = now,
+                LastSeenAtUtc = now,
+                IsVerified = true
+            };
+            db.ExternalIdentities.Add(identity);
+        }
+        else
+        {
+            identity.LastSeenAtUtc = now;
+            identity.IsVerified = true;
+        }
+        var reviews = await db.IdentityReviews.Where(x => x.EntityType == normalizedType && x.SourceName == source &&
+            x.ExternalId == externalId && x.Status == IdentityReviewStatus.Pending).ToListAsync(cancellationToken).ConfigureAwait(false);
+        foreach (var review in reviews)
+        {
+            review.CandidateEntityId = entityId;
+            review.Status = IdentityReviewStatus.Resolved;
+            review.ResolvedAtUtc = now;
+        }
+        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        Console.WriteLine($"Linked {source}:{externalId} to {normalizedType} {entityId:D}; resolved {reviews.Count} pending review(s).");
         return 0;
     }
 
@@ -320,11 +500,25 @@ internal static class TravModelCommand
         NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals
     };
 
+    private static readonly JsonSerializerOptions PrettyJsonOptions = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions ImportJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter() }
+    };
+
     private sealed class FixedClock(DateTimeOffset value) : IClock
     {
         public DateTimeOffset UtcNow { get; } = value;
     }
 }
+
+internal sealed record EnrichmentImportDocument(
+    string Kind,
+    string SourceName,
+    Uri SourceUrl,
+    DateTimeOffset RetrievedAtUtc,
+    DateTimeOffset? ObservedAtUtc,
+    JsonElement Records);
 
 internal sealed class Arguments
 {
@@ -353,7 +547,9 @@ internal sealed class Arguments
         : null;
     public T OptionalEnum<T>(string name, T fallback) where T : struct, Enum =>
         values.TryGetValue(name, out var value) ? Enum.Parse<T>(value, ignoreCase: true) : fallback;
-    private string Required(string name) => values.TryGetValue(name, out var value)
+    public string Required(string name) => values.TryGetValue(name, out var value)
         ? value
         : throw new ArgumentException($"--{name} is required.");
+    public string? Optional(string name) => values.TryGetValue(name, out var value) ? value : null;
+    public T RequiredEnum<T>(string name) where T : struct, Enum => Enum.Parse<T>(Required(name), ignoreCase: true);
 }

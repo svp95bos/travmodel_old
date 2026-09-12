@@ -12,6 +12,11 @@ public sealed class TravDbContext(DbContextOptions<TravDbContext> options) : DbC
     public DbSet<Person> People => Set<Person>();
     public DbSet<Starter> Starters => Set<Starter>();
     public DbSet<HistoricalStart> HistoricalStarts => Set<HistoricalStart>();
+    public DbSet<HistoricalStartRevision> HistoricalStartRevisions => Set<HistoricalStartRevision>();
+    public DbSet<ExternalIdentity> ExternalIdentities => Set<ExternalIdentity>();
+    public DbSet<IdentityReview> IdentityReviews => Set<IdentityReview>();
+    public DbSet<ProviderCheckpoint> ProviderCheckpoints => Set<ProviderCheckpoint>();
+    public DbSet<SourceQualification> SourceQualifications => Set<SourceQualification>();
     public DbSet<RaceResult> Results => Set<RaceResult>();
     public DbSet<BettingMarketMembership> BettingMarketMemberships => Set<BettingMarketMembership>();
     public DbSet<Observation> Observations => Set<Observation>();
@@ -32,7 +37,15 @@ public sealed class TravDbContext(DbContextOptions<TravDbContext> options) : DbC
         modelBuilder.Entity<Horse>().HasIndex(x => new { x.ExternalSource, x.ExternalId }).IsUnique();
         modelBuilder.Entity<Person>().HasIndex(x => new { x.ExternalSource, x.ExternalId }).IsUnique();
         modelBuilder.Entity<Starter>().HasIndex(x => new { x.RaceId, x.HorseId }).IsUnique();
-        modelBuilder.Entity<HistoricalStart>().HasIndex(x => new { x.HorseId, x.ExternalRaceId }).IsUnique();
+        modelBuilder.Entity<HistoricalStart>().HasIndex(x => new { x.HorseId, x.CanonicalStartKey }).IsUnique();
+        modelBuilder.Entity<HistoricalStart>().HasIndex(x => new { x.SourceName, x.ExternalRaceId });
+        modelBuilder.Entity<HistoricalStartRevision>().HasIndex(x => x.ContentHash).IsUnique();
+        modelBuilder.Entity<HistoricalStartRevision>().HasIndex(x => new { x.HistoricalStartId, x.RetrievedAtUtc });
+        modelBuilder.Entity<ExternalIdentity>().HasIndex(x => new { x.EntityType, x.SourceName, x.ExternalId }).IsUnique();
+        modelBuilder.Entity<ExternalIdentity>().HasIndex(x => new { x.EntityType, x.EntityId });
+        modelBuilder.Entity<IdentityReview>().HasIndex(x => new { x.EntityType, x.SourceName, x.ExternalId, x.Status });
+        modelBuilder.Entity<ProviderCheckpoint>().HasIndex(x => new { x.Provider, x.Scope }).IsUnique();
+        modelBuilder.Entity<SourceQualification>().HasIndex(x => new { x.SourceName, x.Capability }).IsUnique();
         modelBuilder.Entity<RaceResult>().HasIndex(x => new { x.RaceId, x.StarterId }).IsUnique();
         modelBuilder.Entity<BettingMarketMembership>().HasIndex(x => new { x.RaceId, x.Product, x.ProductId }).IsUnique();
         modelBuilder.Entity<Observation>().HasIndex(x => x.ContentHash).IsUnique();
@@ -48,6 +61,7 @@ public sealed class TravDbContext(DbContextOptions<TravDbContext> options) : DbC
         modelBuilder.Entity<HistoricalStart>().HasOne(x => x.Horse).WithMany().HasForeignKey(x => x.HorseId).OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<HistoricalStart>().HasOne(x => x.Driver).WithMany().HasForeignKey(x => x.DriverId).OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<HistoricalStart>().HasOne(x => x.Trainer).WithMany().HasForeignKey(x => x.TrainerId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<HistoricalStartRevision>().HasOne(x => x.HistoricalStart).WithMany().HasForeignKey(x => x.HistoricalStartId).OnDelete(DeleteBehavior.Cascade);
         modelBuilder.Entity<RaceResult>().HasOne(x => x.Race).WithMany().HasForeignKey(x => x.RaceId).OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<RaceResult>().HasOne(x => x.Starter).WithMany().HasForeignKey(x => x.StarterId).OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<PredictionRun>().HasOne(x => x.Race).WithMany().HasForeignKey(x => x.RaceId).OnDelete(DeleteBehavior.Restrict);
@@ -59,6 +73,15 @@ public sealed class TravDbContext(DbContextOptions<TravDbContext> options) : DbC
         modelBuilder.Entity<ModelVersion>().Property(x => x.Kind).HasConversion<string>().HasMaxLength(32);
         modelBuilder.Entity<ModelVersion>().Property(x => x.Status).HasConversion<string>().HasMaxLength(16);
         modelBuilder.Entity<Observation>().Property(x => x.State).HasConversion<string>().HasMaxLength(24);
+        modelBuilder.Entity<IdentityReview>().Property(x => x.Status).HasConversion<string>().HasMaxLength(16);
+        modelBuilder.Entity<SourceQualification>().Property(x => x.Status).HasConversion<string>().HasMaxLength(16);
+        modelBuilder.Entity<SourceQualification>().Property(x => x.BaseUri).HasConversion<string>();
+
+        modelBuilder.Entity<Observation>()
+            .HasOne(x => x.IngestionRun)
+            .WithMany()
+            .HasForeignKey(x => x.IngestionRunId)
+            .OnDelete(DeleteBehavior.SetNull);
 
         modelBuilder.Entity<RaceResult>().Property(x => x.KilometerTimeSeconds).HasPrecision(8, 3);
         modelBuilder.Entity<RaceResult>().Property(x => x.WinningMarginMetres).HasPrecision(10, 3);
@@ -66,6 +89,9 @@ public sealed class TravDbContext(DbContextOptions<TravDbContext> options) : DbC
         modelBuilder.Entity<HistoricalStart>().Property(x => x.KilometerTimeSeconds).HasPrecision(8, 3);
         modelBuilder.Entity<HistoricalStart>().Property(x => x.Odds).HasPrecision(12, 4);
         modelBuilder.Entity<HistoricalStart>().Property(x => x.PrizeMoneySek).HasPrecision(18, 2);
+        modelBuilder.Entity<HistoricalStartRevision>().Property(x => x.KilometerTimeSeconds).HasPrecision(8, 3);
+        modelBuilder.Entity<HistoricalStartRevision>().Property(x => x.Odds).HasPrecision(12, 4);
+        modelBuilder.Entity<HistoricalStartRevision>().Property(x => x.PrizeMoneySek).HasPrecision(18, 2);
         modelBuilder.Entity<StarterPrediction>().Property(x => x.MarketOdds).HasPrecision(12, 4);
         modelBuilder.Entity<Track>().Property(x => x.WidthMetres).HasPrecision(8, 2);
     }

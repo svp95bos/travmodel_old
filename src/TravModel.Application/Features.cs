@@ -52,6 +52,60 @@ public sealed record StarterFeatureVector(
 
 public sealed record StarterProbability(Guid StarterId, double Probability, int Rank);
 
+public sealed record StarterShadowFeatures(
+    Guid StarterId,
+    int RecentStartsAvailable,
+    bool HasThreeRecentStarts,
+    bool HasFiveRecentStarts,
+    string? ShoesToday,
+    string? ShoesPreviousStart,
+    bool? ShoesChanged,
+    string? SulkyToday,
+    string? SulkyPreviousStart,
+    bool? SulkyChanged);
+
+public sealed record ShadowRaceFeatureSet(
+    Guid RaceId,
+    DateTimeOffset CutoffUtc,
+    IReadOnlyList<StarterShadowFeatures> Starters);
+
+public static class PointInTimeShadowFeatureBuilder
+{
+    public static ShadowRaceFeatureSet Build(RaceFeatureInput input, DateTimeOffset cutoffUtc)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        if (cutoffUtc >= input.Race.ScheduledStartUtc)
+            throw new ArgumentOutOfRangeException(nameof(cutoffUtc), "Feature cutoff must precede race start.");
+        var observations = input.Observations.Where(x => x.RetrievedAtUtc <= cutoffUtc &&
+            (x.ObservedAtUtc is null || x.ObservedAtUtc <= cutoffUtc)).ToArray();
+        var values = input.Starters.Select(value =>
+        {
+            var history = value.HistoricalStarts.Where(x => x.StartTimeUtc < cutoffUtc && x.RetrievedAtUtc <= cutoffUtc)
+                .OrderByDescending(x => x.StartTimeUtc).Take(10).ToArray();
+            var previous = history.FirstOrDefault();
+            var shoes = LatestText(observations, value.Starter.Id, "Shoes")
+                ?? CombineShoes(LatestText(observations, value.Starter.Id, "ShoesFront"), LatestText(observations, value.Starter.Id, "ShoesHind"));
+            var sulky = LatestText(observations, value.Starter.Id, "SulkyType")
+                ?? LatestText(observations, value.Starter.Id, "Sulky");
+            return new StarterShadowFeatures(value.Starter.Id, history.Length, history.Length >= 3, history.Length >= 5,
+                shoes, previous?.Shoes, Changed(shoes, previous?.Shoes), sulky, previous?.Sulky, Changed(sulky, previous?.Sulky));
+        }).ToArray();
+        return new ShadowRaceFeatureSet(input.Race.Id, cutoffUtc, values);
+    }
+
+    private static string? LatestText(IEnumerable<Observation> observations, Guid entityId, string field) => observations
+        .Where(x => x.EntityId == entityId.ToString("D", CultureInfo.InvariantCulture) &&
+                    string.Equals(x.Field, field, StringComparison.OrdinalIgnoreCase) && x.State == ObservationState.Observed)
+        .OrderByDescending(x => x.ObservedAtUtc ?? x.RetrievedAtUtc)
+        .Select(x => x.NormalizedValue)
+        .FirstOrDefault(x => !string.IsNullOrWhiteSpace(x));
+
+    private static string? CombineShoes(string? front, string? hind) => front is null && hind is null ? null : $"{front ?? "Unknown"}/{hind ?? "Unknown"}";
+    private static bool? Changed(string? current, string? previous) => current is null || previous is null
+        ? null
+        : !string.Equals(current, previous, StringComparison.OrdinalIgnoreCase);
+}
+
 public static class PointInTimeFeatureBuilder
 {
     private static readonly TimeSpan RecentWindow = TimeSpan.FromDays(90);

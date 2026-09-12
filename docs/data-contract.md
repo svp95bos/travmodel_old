@@ -25,6 +25,8 @@ existed by cutoff `C`. Forecast fields are named separately from measured MetObs
 
 Historical starts must have `StartTimeUtc < C`. Results, comments, future starts, future rolling statistics, and late declarations are forbidden.
 
+Historical-start projections also retain `FirstSeenAtUtc` and append immutable revisions. A feature query resolves the latest authoritative revision whose retrieval and observation timestamps are both eligible at cutoff `C`. A correction may update the current projection without changing what an older cutoff sees.
+
 The T-15 operational task polls every five minutes and selects races 15–20 minutes from scheduled start. The precise feature cutoff is stored; missing snapshots stay missing.
 
 ## Storage layers
@@ -34,6 +36,10 @@ The T-15 operational task polls every five minutes and selects races 15–20 min
 3. Canonical: race-centred normalized SQL entities keyed by official external IDs.
 4. Curated: immutable date partitions and checksummed manifests under `data/curated`, committed through daily PRs.
 5. Derived: feature datasets and model artifacts, reproducible from a manifest and excluded from Git when bulky.
+
+External source identifiers are mapped through `ExternalIdentity`. Canonical entities are never merged by name alone; unresolved mappings are placed in `IdentityReview`.
+
+Source automation is opt-in per provider and capability through `SourceQualification`. A public URL is not sufficient evidence that automated collection is permitted.
 
 ## Prediction contract
 

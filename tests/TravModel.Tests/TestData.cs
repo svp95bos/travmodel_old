@@ -31,12 +31,19 @@ internal static class TestData
     {
         HorseId = horseId,
         ExternalRaceId = Guid.NewGuid().ToString(),
+        CanonicalStartKey = Guid.NewGuid().ToString(),
         StartTimeUtc = start,
         TrackName = "Test",
         RaceNumber = 1,
         DistanceMetres = 2140,
         StartMethod = StartMethod.Auto,
         PostPosition = 1,
-        FinishPosition = finish
+        FinishPosition = finish,
+        SourceName = "test",
+        SourceUrl = "https://example.test/history",
+        RetrievedAtUtc = start.AddHours(1),
+        FirstSeenAtUtc = start.AddHours(1),
+        LastSeenAtUtc = start.AddHours(1),
+        CompletenessFlags = string.Empty
     };
 }
